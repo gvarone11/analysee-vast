@@ -1,0 +1,51 @@
+# docker-compose per test locale SENZA GPU (CPU-only)
+# Usato per verificare che il servizio funzioni prima di deployare su Vast.ai
+#
+# Uso:
+#   cd vast/
+#   docker-compose -f docker-compose.local.yml up --build
+#
+# Il servizio parte in CPU mode (torch.cuda.is_available() = False).
+# I modelli devono essere in ./models_local/*.pt o *.pth
+
+version: "3.9"
+
+services:
+  gpu-inference:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gms-gpu-inference:local
+    # container_name rimosso per permettere --scale N
+    ports:
+      # Porta dinamica: il host assegna una porta libera per ogni replica
+      # (l'inferenza va via RabbitMQ, la porta serve solo per health check manuale)
+      - "8002"
+    volumes:
+      # Monta la directory modelli locali (read-only dentro il container)
+      - ./models_local:/tmp/yolo_models:ro
+    environment:
+      MODEL_CACHE_DIR: /tmp/yolo_models
+      UVICORN_PORT: "8002"
+      PYTHONUNBUFFERED: "1"
+      # RabbitMQ broker: usa host.docker.internal per raggiungere il container
+      # avviato dal backend/docker-compose_local.yml (rete Docker separata)
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@host.docker.internal:5672/%2F}
+      # Numero di thread worker RabbitMQ per container (condividono 1 modello in VRAM)
+      RABBITMQ_WORKER_THREADS: ${RABBITMQ_WORKER_THREADS:-4}
+    # Abilita GPU (RTX 2060, RTX 3090, etc.)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    # Nessun --gpus → usa CPU automaticamente
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
