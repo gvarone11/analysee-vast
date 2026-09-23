@@ -1,0 +1,48 @@
+name: CI/CD Deploy to Vast - Analysee Staging
+
+on:
+  push:
+    branches:
+      - staging
+
+jobs:
+  deploy:
+    environment: Staging
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.7.0
+        with:
+          ssh-private-key: ${{ secrets.VAST_SSH_KEY }}
+
+      - name: Deploy to Vast
+        run: |
+          ssh -o StrictHostKeyChecking=no -p ${{ secrets.VAST_PORT }} root@${{ secrets.VAST_HOST }} << 'EOF'
+          set -e
+
+          cd /workspace/inference
+
+          # Aggiorna il codice direttamente dal repo
+          git fetch origin staging
+          git reset --hard origin/staging
+
+          # Aggiorna i modelli Git LFS
+          git lfs pull
+
+          # Aggiorna onstart.sh nella posizione utilizzata da Vast
+          cp /workspace/inference/onstart.sh /root/onstart.sh
+          chmod +x /root/onstart.sh
+
+          # Crea/aggiorna il file .env
+          echo "RABBITMQ_URL=${{ secrets.RABBITMQ_URL }}" > .env
+
+          # Riavvia il servizio di inference
+          supervisorctl restart gpu-inference
+
+          # Verifica lo stato del servizio
+          supervisorctl status gpu-inference
+          EOF
